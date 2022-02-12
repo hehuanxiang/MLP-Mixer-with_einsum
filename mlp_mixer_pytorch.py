@@ -11,6 +11,9 @@ from tvm.te.operation import placeholder
 
 import numpy as np
 import torch
+
+from torchsummary import summary
+
 class PreNormResidual(nn.Module):
     def __init__(self, dim, fn):
         super().__init__()
@@ -21,8 +24,9 @@ class PreNormResidual(nn.Module):
         return self.fn(self.norm(x)) + x
 
 class einsum_linear(nn.Module):
-    def __init__(self, num_patches, patch_size, channels, dim):
+    def __init__(self, batch_size, num_patches, patch_size, channels, dim):
         super().__init__()
+        self.batch_size = batch_size
         self.num_patches = num_patches
         self.patch_size = patch_size
         self.channels = channels
@@ -30,9 +34,10 @@ class einsum_linear(nn.Module):
     
     def forward(self, x):
         Arg = namedtuple('Arg', ['name', 'shape'])      # Arg, 实例名， 后面为属性
-        z, phl = einsum('ij,jk->ik', 
-                        Arg('w', (self.num_patches, (self.patch_size ** 2) * self.channels)), 
-                        Arg('x', ((self.patch_size ** 2) * self.channels, self.dim)), output_name='Z')
+        z, phl = einsum('ijk,kl->ijl', 
+                        Arg('x', (self.batch_size, (self.num_patches ** 2), (self.patch_size ** 2) * self.channels)),
+                        Arg('w', (((self.patch_size ** 2) * self.channels), self.dim)), 
+                        output_name='Z')
         
         s = te.create_schedule(z.op)
         tgt_gpu = tvm.target.Target(target="cuda", host="llvm")
@@ -63,7 +68,7 @@ def FeedForward(dim, expansion_factor = 4, dropout = 0., dense = nn.Linear):
         nn.Dropout(dropout)
     )
 
-def MLPMixer(*, image_size, channels, patch_size, dim, depth, num_classes, expansion_factor = 4, dropout = 0.):
+def MLPMixer(*, batch_size, image_size, channels, patch_size, dim, depth, num_classes, expansion_factor = 4, dropout = 0.):
     assert (image_size % patch_size) == 0, 'image must be divisible by patch size'
     num_patches = (image_size // patch_size) ** 2       # 图像块数量，图片大小为 image_size ** 2
     chan_first, chan_last = partial(nn.Conv1d, kernel_size = 1), nn.Linear
@@ -75,7 +80,7 @@ def MLPMixer(*, image_size, channels, patch_size, dim, depth, num_classes, expan
         
         # 2. 用一个全连接网络对所有patch进行处理，提取tokens
         # nn.Linear((patch_size ** 2) * channels, dim),
-        einsum_linear(num_patches, patch_size, channels, dim),
+        einsum_linear(batch_size, num_patches, patch_size, channels, dim),
 
         # 3. 经过N个Mixer层，混合提炼特征信息
         *[nn.Sequential(
@@ -135,12 +140,14 @@ def einsum(pattern, *args, output_name=None):
     o = te.compute(output_shape, func, name=output_name)
     return o, placeholders
 
-# model = MLPMixer(
-#     image_size = 28,
-#     channels = 1,
-#     patch_size = 7,
-#     dim = 14,
-#     depth = 3,
-#     num_classes = 10
-# )
-# print(model)
+model = MLPMixer(
+    batch_size = 52,
+    image_size = 28,
+    channels = 1,
+    patch_size = 7,
+    dim = 14,
+    depth = 3,
+    num_classes = 10
+)
+print(model)
+summary(model, (1, 28, 28), batch_size=52, device="cpu")

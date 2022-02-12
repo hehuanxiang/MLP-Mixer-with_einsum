@@ -56,6 +56,7 @@ mse = nn.MSELoss()
 def train(model, device, train_loader, optimizer, epoch):
     model.train()
     for batch_idx, (data, target) in enumerate(train_loader):
+        # print(data.shape)
         batch_size_train = data.shape[0]
         data, target = data.to(device), target.to(device)
         optimizer.zero_grad()
